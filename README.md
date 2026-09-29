@@ -1,7 +1,7 @@
 # NAI-IDLECLOUD
 
 把 **NovelAI 官方 API** 请求转换为 **IDLECLOUD 通用生成端点**（`POST /api/generate_image`）的转换代理。
-面向只支持 NovelAI 官方接口的客户端（如酒馆 SillyTavern），使其无需改代码即可改用 IDLECLOUD 服务。
+面向只支持 NovelAI 官方接口的客户端，使其无需改代码即可改用 IDLECLOUD 服务。
 
 - API 文档参考：<https://nai.idlecloud.cc/api_docs.html>
 - 上游基础地址：`https://api.idlecloud.cc`
@@ -33,7 +33,8 @@ NovelAI 官方客户端有两个固定预期：
 | :--- | :--- |
 | `POST /ai/generate-image` | `POST /api/generate_image` → 轮询 `GET /api/get_result/{job_id}` |
 | `POST /ai/augment-image` | 同上（图像工具：上色 / 情绪 / 线稿 / 草稿 / 清理） |
-| `GET /user/subscription` 等 | 本地合成响应（不消耗上游额度） |
+| `GET /user/subscription` | 本地构造（额度映射，见第六节） |
+| `GET /user/information` | 本地构造（试用张数映射） |
 | `POST /ai/upscale` | 返回 `501`（上游无此功能） |
 | `POST /ai/generate-voice` | 返回 `501`（上游无此功能） |
 | `POST /ai/generate`（文本补全） | 返回 `501`（上游只有 Grok 对话接口，语义不同，不做有损映射） |
@@ -81,10 +82,6 @@ NovelAI 官方客户端有两个固定预期：
 客户端收到 HTTP 401  {"statusCode":401,"message":"提交任务失败: HTTP 401","code":"UPSTREAM_ERROR"}
 ```
 
-### 与 NovelAI 官方鉴权探测的兼容
-
-客户端（含酒馆）启动时可能先请求 `/user/subscription` 校验 Token。IDLECLOUD 没有等价接口，代理返回**合成的订阅信息**（`active: true`, `tier: 3`），使客户端通过校验。该请求不消耗上游额度。
-
 ---
 
 ## 四、返回格式：重新打包 ZIP
@@ -121,37 +118,82 @@ IDLECLOUD 要求：
 
 ---
 
-## 六、部署（unraid）
+## 六、额度映射（NovelAI 字段 ← IDLECLOUD 额度）
 
-### 已部署实例
+### 为什么需要自己统计
 
-| 项目 | 值 |
+IDLECLOUD 的 `GET /api/user_info` **只支持 Session 认证**，用 Bearer API Key 读不到额度
+（实测返回 `ACCOUNT_AUTH_REQUIRED`）。因此代理以「经过本代理的成功生成」为口径统计，
+并在上游返回 `NOVELAI_V5_WEEKLY_QUOTA_EXCEEDED` 时，用其权威的 `limit` / `remaining` / `reset_at`
+校正本地计数。状态默认持久化到 `/data/quota.json`。
+
+### 映射规则
+
+| NovelAI 字段 | 承载的 IDLECLOUD 额度 |
 | :--- | :--- |
-| 容器名 | `NAI-IDLECLOUD` |
-| 镜像 | `nai-idlecloud-proxy:latest`（本地构建） |
-| 端口 | `8788` |
-| 模板 | `/boot/config/plugins/dockerMan/templates-user/my-NAI-IDLECLOUD.xml` |
-| 源码/构建目录 | `/mnt/user/appdata/nai-idlecloud-proxy/build` |
+| `trainingStepsLeft.fixedTrainingStepsLeft` | **每日生图请求次数**（默认返回「剩余」，可用 `DAILY_VALUE_MODE=used` 改为「已用」） |
+| `usage.percent`（V5 充能 / Opus 生成额度） | **每周 V5 剩余次数**，剩余 67 次即返回 `67` |
+| `usage.isNegative` | 每周额度是否用尽 |
+| `usage.timeUntilNextPercent` | 距每周额度重置的秒数 |
+| `/user/information` 的 `trialImagesLeft` | 每日剩余次数（与订阅端点显示一致） |
 
-### 手动构建
+`usage.percent` 的语义与官方一致：它是**剩余量**，不是已用量
+（官方文案 "N% of Opus Generations remaining"）。
 
-```bash
-cd /mnt/user/appdata/nai-idlecloud-proxy/build
-docker build -t nai-idlecloud-proxy:latest .
+### 实际输出示例
+
+每日上限 600、已用 183；每周 V5 上限 100、已用 33 时：
+
+```json
+{
+  "tier": 3,
+  "active": true,
+  "expiresAt": 1822193849,
+  "trainingStepsLeft": { "fixedTrainingStepsLeft": 417, "purchasedTrainingSteps": 0 },
+  "usage": { "percent": 67, "isNegative": false, "timeUntilNextPercent": 558150 },
+  "perks": { "unlimitedImageGeneration": false },
+  "idlecloud": {
+    "daily": { "used": 183, "limit": 600, "remaining": 417 },
+    "v5_weekly": { "used": 33, "limit": 100, "remaining": 67, "percent": 67 }
+  }
+}
 ```
 
-### 手动运行
+`trainingStepsLeft` = 417（每日剩余次数），`usage.percent` = 67（每周 V5 剩余次数）。
 
-```bash
-docker run -d --name NAI-IDLECLOUD --restart unless-stopped \
-  -p 8788:8788 \
-  -e IDLECLOUD_API_KEY=<你的IDLECLOUD Key> \
-  nai-idlecloud-proxy:latest
-```
+### 计数规则
+
+- **只有成功生成才计数**：上游失败或超时不扣减；
+- **大图不计数**：宽高乘积 > 1048576、步数 > 28，或显式 `use_upscale_credits` 的请求走大图点数，
+  既不占每日次数，也不计入 V5 周额度；
+- **非 V5 模型不扣 V5 充能**：只有 `nai-diffusion-5-*` 消耗每周额度；
+- **周期重置**：每日额度按北京时间（UTC+8）零点重置；每周额度按首次计入额度的 V5 生成起算的连续 7 天。
 
 ---
 
-## 七、环境变量
+## 七、部署
+
+### 使用预构建镜像
+
+```bash
+docker run -d --name nai-idlecloud-proxy --restart unless-stopped \
+  -p 8788:8788 \
+  -v /path/to/data:/data \
+  -e IDLECLOUD_API_KEY=<你的IDLECLOUD Key> \
+  ghcr.io/wlgh01/nai-idlecloud-proxy:latest
+```
+
+### 本地构建
+
+```bash
+docker build -t nai-idlecloud-proxy:latest .
+```
+
+镜像由 GitHub Actions 在推送到 `main` 或打 `v*` tag 时自动构建并推送到 GHCR。
+
+---
+
+## 八、环境变量
 
 | 变量 | 默认值 | 说明 |
 | :--- | :--- | :--- |
@@ -165,26 +207,32 @@ docker run -d --name NAI-IDLECLOUD --restart unless-stopped \
 | `REQUEST_TIMEOUT_MS` | `900000` | 单任务总超时（15 分钟） |
 | `AUGMENT_MODEL` | `nai-diffusion-4-5-full` | 图像工具端点的兜底模型 |
 | `LOG_LEVEL` | `info` | `error` / `warn` / `info` / `debug` |
+| `QUOTA_FILE` | `/data/quota.json` | 额度状态文件；设为空字符串则仅内存统计 |
+| `DAILY_LIMIT` | `600` | 每日生图请求次数上限 |
+| `V5_WEEKLY_LIMIT` | `100` | 每周 V5 图片额度上限 |
+| `DAILY_VALUE_MODE` | `remaining` | 训练步数字段填 `remaining`（剩余）或 `used`（已用） |
+| `V5_PERCENT_MODE` | `count` | `count` = 剩余次数直接当百分比；`ratio` = 剩余/上限×100 |
+| `NAI_TIER` | `3` | 返回给客户端的订阅档位（3 = Opus，才会显示 V5 充能条） |
+| `NORMAL_STEPS_LIMIT` | `28` | 普通模式步数上限，超过视为大图 |
 
 ---
 
-## 八、客户端接入（以酒馆为例）
+## 九、客户端接入
 
-1. 图像生成扩展的 **Source** 选择 `NovelAI Diffusion`；
-2. **API Key** 填入你的 IDLECLOUD API Key（若代理已配置 `IDLECLOUD_API_KEY`，这里可随便填）；
-3. 由于酒馆后端的 NovelAI 地址是**硬编码**的（`image.novelai.net`），若要真正走本代理，需满足其一：
-   - 用 `extra_hosts` 或本地 DNS 把 `image.novelai.net` / `api.novelai.net` 指向本代理（仅建议在测试环境使用）；
-   - 或改用支持自定义 Base URL 的客户端 / 插件；
-   - 或直接调用本代理：`POST http://<unraid-IP>:8788/ai/generate-image`。
+代理对外暴露的是 NovelAI 官方路径（`/ai/generate-image`、`/user/subscription` 等），
+因此客户端只需把 NovelAI 的 Base URL 指向本代理即可。
+
+注意：部分客户端（如 SillyTavern）后端把 NovelAI 地址**硬编码**为 `image.novelai.net`，
+此时需用 `extra_hosts` 或本地 DNS 把该域名指向本代理，或改用支持自定义 Base URL 的客户端。
 
 ### 直接验证
 
 ```bash
-# 健康检查
-curl http://<unraid-IP>:8788/healthz
+# 健康检查（含额度快照）
+curl http://<host>:8788/healthz
 
 # 生成（返回 ZIP）
-curl -X POST http://<unraid-IP>:8788/ai/generate-image \
+curl -X POST http://<host>:8788/ai/generate-image \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <IDLECLOUD API Key>" \
   -d '{"action":"generate","input":"1girl, solo","model":"nai-diffusion-4-5-full",
@@ -195,11 +243,11 @@ curl -X POST http://<unraid-IP>:8788/ai/generate-image \
 
 ---
 
-## 九、测试
+## 十、测试
 
 ```bash
-# 单元 + 集成测试（46 项，含 mock 上游的完整链路）
-node --test "test/*.test.js"
+# 单元 + 集成测试（86 项，含 mock 上游的完整链路）
+node --test
 
 # 反向验证：故意破坏实现，确认测试会变红
 node scripts/mutation.mjs
@@ -210,7 +258,7 @@ node scripts/smoke.mjs
 
 ---
 
-## 十、已知限制
+## 十一、已知限制
 
 - **请求间隔 20 秒**是上游硬性要求，出图速度受此约束；
 - 上游**不提供**放大（upscale）、语音（voice）与文本补全，相关端点返回 `501` 并说明原因；

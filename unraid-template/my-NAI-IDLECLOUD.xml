@@ -1,17 +1,20 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>NAI-IDLECLOUD</Name>
-  <Repository>nai-idlecloud-proxy:latest</Repository>
-  <Registry/>
+  <Repository>ghcr.io/wlgh01/nai-idlecloud-proxy:latest</Repository>
+  <Registry>https://github.com/WLGH01/nai-idlecloud-proxy/pkgs/container/nai-idlecloud-proxy</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <MyMAC/>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
-  <Support/>
-  <Project/>
+  <Support>https://github.com/WLGH01/nai-idlecloud-proxy/issues</Support>
+  <Project>https://github.com/WLGH01/nai-idlecloud-proxy</Project>
   <ReadMe/>
   <Overview>把 NovelAI 官方 API 请求转换为 IDLECLOUD 通用生成端点（POST /api/generate_image，异步任务 + 轮询）的转换代理。&#13;
+&#13;
+镜像地址：ghcr.io/wlgh01/nai-idlecloud-proxy:latest&#13;
+源码与说明：https://github.com/WLGH01/nai-idlecloud-proxy&#13;
 &#13;
 【用途】酒馆（SillyTavern）等只支持 NovelAI 官方接口的客户端，通过本代理即可改用 IDLECLOUD 服务，无需修改客户端。&#13;
 &#13;

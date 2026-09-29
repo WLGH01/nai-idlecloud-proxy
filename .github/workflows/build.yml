@@ -1,7 +1,7 @@
 name: Build and push container image
 
 # 推送到 main 分支或打 tag 时，自动构建镜像并推送到 GitHub Container Registry。
-# unraid 模板的 <Repository> 指向 ghcr.io/wlgh01/nai-idlecloud-proxy:latest。
+# 镜像地址：ghcr.io/wlgh01/nai-idlecloud-proxy
 on:
   push:
     branches: [main]
@@ -28,9 +28,11 @@ jobs:
         with:
           node-version: '20'
 
-      # 镜像发布前先跑测试，测试不过就不发布
+      # 镜像发布前先跑测试，测试不过就不发布。
+      # 注意：不要用引号包住 glob（如 "test/*.test.js"），YAML 下 shell 不会展开它，
+      # Node 20 的 --test 也不接受 glob 模式。无参数时 Node 会自动发现 test 目录。
       - name: Run tests
-        run: node --test "test/*.test.js"
+        run: node --test
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

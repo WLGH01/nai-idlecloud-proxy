@@ -36,7 +36,7 @@ export const VERSION = '1.0.0';
 
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 
-/** 读取内置图标（用于 unraid 模板的 Icon 指向本服务）。 */
+/** 读取内置图标，供容器模板的 Icon 指向本服务。 */
 function loadIcon() {
     try {
         return readFileSync(join(MODULE_DIR, 'icon.png'));
@@ -527,7 +527,7 @@ export function createProxyServer(config) {
 
         const apiKey = resolveApiKey(req.headers.authorization);
 
-        // 内置图标：unraid 模板的 <Icon> 指向 http://<IP>:<PORT>/icon.png
+        // 内置图标：容器模板的 <Icon> 指向 http://<IP>:<PORT>/icon.png
         if (path === '/icon.png') {
             if (!ICON_PNG) {
                 return sendError(res, 404, 'icon.png 未打包进镜像', 'NOT_FOUND');
