@@ -37,6 +37,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # 构建后先本地起容器验证一遍：单元测试只看源码，发现不了
+      # 「Dockerfile 漏 COPY 某模块」这类只在运行时暴露的问题。
+      - name: Build image for smoke test
+        run: docker build -t nai-idlecloud-proxy:smoke .
+
+      - name: Image smoke test
+        run: SMOKE_IMAGE=nai-idlecloud-proxy:smoke SMOKE_PORT=18788 node scripts/docker-smoke.mjs
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:

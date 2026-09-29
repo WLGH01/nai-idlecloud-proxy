@@ -287,13 +287,26 @@ export function createProxyServer(config) {
 
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-    /** 解析本次请求应使用的 IDLECLOUD API Key。 */
+    /**
+     * 取出客户端提供的 Bearer token（不做任何替换）。
+     * 用于判断客户端是否已按 NovelAI 契约带上凭据。
+     */
+    function clientBearer(clientAuthHeader) {
+        const m = /^Bearer\s+(.+)$/i.exec(String(clientAuthHeader || '').trim());
+        return m ? m[1].trim() : '';
+    }
+
+    /**
+     * 解析本次请求应发往上游的 IDLECLOUD API Key。
+     *
+     * 注意：即使配置了 IDLECLOUD_API_KEY，客户端**仍必须**带上 Authorization
+     * （NovelAI 客户端本来就会带）。凭据校验与 Key 替换是两件事：
+     * 前者保证接口不被匿名访问，后者决定用哪个 Key 请求上游。
+     */
     function resolveApiKey(clientAuthHeader) {
         if (config.apiKey) return config.apiKey;
         if (!config.authPassthrough) return '';
-        const raw = String(clientAuthHeader || '');
-        const m = /^Bearer\s+(.+)$/i.exec(raw.trim());
-        return m ? m[1].trim() : '';
+        return clientBearer(clientAuthHeader);
     }
 
     function upstreamHeaders(apiKey) {
@@ -554,9 +567,14 @@ export function createProxyServer(config) {
         }
 
         try {
-            // 鉴权：与 NovelAI 官方一致，缺失凭据返回 401
-            if (!apiKey) {
+            // 鉴权：与 NovelAI 官方一致，客户端必须带上 Bearer 凭据。
+            // 这里校验的是「客户端有没有带」，与「上游用哪个 Key」无关：
+            // 配置了 IDLECLOUD_API_KEY 时，客户端仍须带（内容随意）。
+            if (!clientBearer(req.headers.authorization)) {
                 return sendError(res, 401, 'Missing or invalid Authorization header', 'MISSING_AUTH');
+            }
+            if (!apiKey) {
+                return sendError(res, 401, 'No upstream API key available', 'MISSING_UPSTREAM_KEY');
             }
 
             switch (path) {

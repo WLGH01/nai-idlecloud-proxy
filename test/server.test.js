@@ -291,6 +291,36 @@ test('反向验证：客户端缺少 Authorization 时返回 401 且不触达上
     }
 });
 
+test('安全性：已配置 IDLECLOUD_API_KEY 时，客户端仍必须带凭据（不得匿名访问）', async () => {
+    const upstream = await startMockUpstream({ mode: 'simple' });
+    // apiKey 已配置：上游 Key 固定，但客户端凭据校验依然要生效
+    const proxy = await startProxy(upstream.baseUrl, { apiKey: VALID_KEY });
+    try {
+        // 1) 不带任何凭据 -> 401，且不触达上游
+        const noAuth = await fetch(`${proxy.baseUrl}/ai/generate-image`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(naiPayload()),
+        });
+        assert.equal(noAuth.status, 401, '配置了 Key 不代表允许匿名访问');
+        assert.equal(upstream.received.submits.length, 0);
+
+        // 2) 额度端点同样需要凭据
+        const subNoAuth = await fetch(`${proxy.baseUrl}/user/subscription`);
+        assert.equal(subNoAuth.status, 401, '额度端点也不得匿名访问');
+
+        // 3) 带上任意凭据（内容随意）-> 用配置的 Key 成功访问上游
+        const withAuth = await postGenerate(proxy.baseUrl, naiPayload(), {
+            Authorization: 'Bearer anything-goes',
+        });
+        assert.equal(withAuth.res.status, 200);
+        assert.equal(upstream.received.submits.length, 1, '上游应收到请求，且用的是配置的 Key');
+    } finally {
+        proxy.server.close();
+        upstream.server.close();
+    }
+});
+
 test('透传模式：未配置 apiKey 时使用客户端 Bearer 作为 IDLECLOUD Key', async () => {
     const upstream = await startMockUpstream({ mode: 'simple' });
     const proxy = await startProxy(upstream.baseUrl, { apiKey: '', authPassthrough: true });
