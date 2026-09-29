@@ -1,0 +1,13 @@
+# 构建产物与依赖
+node_modules/
+*.log
+
+# 本地额度状态（含用量数据，不入库）
+quota.json
+data/
+
+# 编辑器/系统
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

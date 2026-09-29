@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>NAI-IDLECLOUD</Name>
+  <Repository>nai-idlecloud-proxy:latest</Repository>
+  <Registry/>
+  <Network>bridge</Network>
+  <MyIP/>
+  <MyMAC/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support/>
+  <Project/>
+  <ReadMe/>
+  <Overview>把 NovelAI 官方 API 请求转换为 IDLECLOUD 通用生成端点（POST /api/generate_image，异步任务 + 轮询）的转换代理。&#13;
+&#13;
+【用途】酒馆（SillyTavern）等只支持 NovelAI 官方接口的客户端，通过本代理即可改用 IDLECLOUD 服务，无需修改客户端。&#13;
+&#13;
+【鉴权】客户端仍按 NovelAI 方式发送 Authorization: Bearer &lt;token&gt;，代理会将其替换为你在下方配置的 IDLECLOUD API Key 后再请求上游。推荐填写「IDLECLOUD API Key」，这样客户端里随便填什么 token 都能用。&#13;
+&#13;
+【请求路径】/ai/generate-image、/ai/augment-image 等 NovelAI 官方路径全部保留，内部统一改走 IDLECLOUD 通用端点 /api/generate_image，并自动轮询 /api/get_result/{job_id}；遇到 NovelAI V5 私有交付会自动完成 SHA-256 校验与确认。&#13;
+&#13;
+【返回格式】上游返回图片 URL，代理会重新打包成 ZIP（内含 image.png）以匹配 NovelAI 官方返回格式，客户端无需改动。&#13;
+&#13;
+【在酒馆中的配置】&#13;
+1. 图像生成扩展中选择 NovelAI 作为来源；&#13;
+2. 接口地址填：http://&lt;unraid的IP&gt;:8788 （若客户端要求完整路径，用 http://IP:8788/ai/generate-image）；&#13;
+3. API Key 随意填（例如 idlecloud），真正的 Key 在本容器的「IDLECLOUD API Key」里配置。&#13;
+&#13;
+【限制】IDLECLOUD 要求请求间隔至少 20 秒、并发 1，本代理已内置串行队列自动排队；上游每日额度与订阅档位由 IDLECLOUD 账号决定。&#13;
+&#13;
+【不支持的端点】/ai/upscale（放大）、/ai/generate-voice（语音）上游未提供，会返回 501 并说明原因。&#13;
+&#13;
+【健康检查】http://&lt;unraid的IP&gt;:8788/healthz</Overview>
+  <Category>Tools: Productivity:</Category>
+  <WebUI>http://[IP]:[PORT:8788]/healthz</WebUI>
+  <TemplateURL/>
+  <Icon>http://192.168.3.20:8788/icon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled>0</DateInstalled>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="WebUI 端口" Target="8788" Default="8788" Mode="tcp" Description="宿主端口映射到容器内的 8788。访问 http://unraid的IP:8788/healthz 可查看服务状态与当前上游地址。修改宿主端口后，上方 WebUI 链接与图标地址请同步调整。" Type="Port" Display="always" Required="true" Mask="false">8788</Config>
+  <Config Name="IDLECLOUD API Key（重要）" Target="IDLECLOUD_API_KEY" Default="" Mode="" Description="在 IDLECLOUD 网站生成的 API Key（订阅需达到进阶档位 ¥30/月 或更高）。填写后，代理会用该 Key 访问上游，客户端里填任意 token 均可。留空则回退为「透传模式」：把客户端发来的 Bearer token 直接当作 IDLECLOUD API Key 使用，此时需要在客户端里填入真实的 IDLECLOUD Key。" Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="上游地址" Target="IDLECLOUD_BASE_URL" Default="https://api.idlecloud.cc" Mode="" Description="IDLECLOUD API 基础地址，不带 /api 后缀。除非官方更换域名，否则无需修改。" Type="Variable" Display="advanced" Required="false" Mask="false">https://api.idlecloud.cc</Config>
+  <Config Name="透传模式" Target="AUTH_PASSTHROUGH" Default="true" Mode="" Description="未填写 IDLECLOUD API Key 时，是否把客户端 Bearer token 当作 IDLECLOUD API Key 直接使用。已填写上方 Key 时此项无影响。可选 true / false。" Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
+  <Config Name="最小请求间隔（毫秒）" Target="MIN_INTERVAL_MS" Default="20000" Mode="" Description="两次向上游提交请求之间的最小间隔。IDLECLOUD 要求至少 20 秒，调小可能触发上游限流，建议保持默认。" Type="Variable" Display="advanced" Required="false" Mask="false">20000</Config>
+  <Config Name="并发数" Target="MAX_CONCURRENCY" Default="1" Mode="" Description="同时向上游提交的任务数。IDLECLOUD 限制为每用户 1 个，保持默认 1。调大可能被上游拒绝。" Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
+  <Config Name="轮询间隔（毫秒）" Target="POLL_INTERVAL_MS" Default="5000" Mode="" Description="查询生成结果的间隔。默认 5 秒。调小会增加上游压力，调大会让出图反馈变慢。" Type="Variable" Display="advanced" Required="false" Mask="false">5000</Config>
+  <Config Name="单次任务超时（毫秒）" Target="REQUEST_TIMEOUT_MS" Default="900000" Mode="" Description="单个生成任务等待结果的最长时间，默认 15 分钟。IDLECLOUD 在高峰期可能排队较久，不建议调得过小。" Type="Variable" Display="advanced" Required="false" Mask="false">900000</Config>
+  <Config Name="日志级别" Target="LOG_LEVEL" Default="info" Mode="" Description="可选 error / warn / info / debug。排查问题时用 debug 可看到转换后的请求体（含提示词），排障后建议改回 info。" Type="Variable" Display="advanced" Required="false" Mask="false">info</Config>
+  <TailscaleStateDir/>
+</Container>

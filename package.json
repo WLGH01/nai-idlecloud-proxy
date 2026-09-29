@@ -1,0 +1,15 @@
+{
+  "name": "nai-idlecloud-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NovelAI 官方 API -> IDLECLOUD 通用生成端点(/api/generate_image) 转换代理",
+  "type": "module",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/"
+  }
+}
