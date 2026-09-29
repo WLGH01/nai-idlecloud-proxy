@@ -34,12 +34,18 @@ const build = run('docker', ['build', '-t', IMAGE, '.']);
 if (build.code !== 0) fail('镜像构建失败', build.out);
 console.log('✓ 镜像构建成功');
 
-// 2) 启动
+// 2) 启动（挂载一个宿主属主为 root 的目录，复现 unraid appdata 的真实情况）
+const { mkdtempSync, rmSync, statSync } = await import('node:fs');
+const { tmpdir } = await import('node:os');
+const { join } = await import('node:path');
+const dataDir = mkdtempSync(join(tmpdir(), 'nai-smoke-data-'));
+
 run('docker', ['rm', '-f', CONTAINER]);
 console.log(`启动容器 ${CONTAINER} …`);
 const start = run('docker', [
     'run', '-d', '--name', CONTAINER,
     '-p', `${PORT}:8788`,
+    '-v', `${dataDir}:/data`,
     '-e', 'IDLECLOUD_API_KEY=smoke-key',
     IMAGE,
 ]);
@@ -106,8 +112,44 @@ try {
         console.error(`✗ 额度端点无法解析: ${q.out.trim().slice(-200)}`);
         failed = true;
     }
+
+    // 6) 额度持久化：写一次状态 -> 重启 -> 计数必须还在。
+    //    这一步专治「挂载目录属主不对导致写不进去，重启后额度重置」的问题。
+    const beforeRestart = run('docker', ['exec', CONTAINER, 'node', '-e',
+        "const fs=require('fs');const p=process.env.QUOTA_FILE||'/data/quota.json';" +
+        "fs.writeFileSync(p, JSON.stringify({version:1,daily:{date:new Date(Date.now()+8*3600e3).toISOString().slice(0,10),used:42},weekly:{cycleStart:null,used:7,limit:100}}));" +
+        "console.log(fs.existsSync(p)?'WROTE':'FAILED')"]);
+    if (!beforeRestart.out.includes('WROTE')) {
+        console.error('✗ 无法写入额度状态文件（挂载目录权限问题）');
+        console.error(beforeRestart.out.trim().slice(-300));
+        failed = true;
+    } else {
+        run('docker', ['restart', CONTAINER]);
+        let ok = false;
+        for (let i = 0; i < 30; i++) {
+            const s = run('docker', ['inspect', '--format', '{{.State.Health.Status}}', CONTAINER]);
+            if (s.out.trim() === 'healthy') { ok = true; break; }
+            sleep(1000);
+        }
+        if (!ok) {
+            console.error('✗ 重启后容器未恢复 healthy');
+            failed = true;
+        } else {
+            const after = run('docker', ['exec', CONTAINER, 'node', '-e',
+                "fetch('http://127.0.0.1:8788/user/subscription',{headers:{Authorization:'Bearer x'}})" +
+                ".then(r=>r.json()).then(d=>console.log(d.idlecloud.daily.used+'/'+d.idlecloud.v5_weekly.used))"]);
+            const val = after.out.trim().split('\n').pop();
+            if (val === '42/7') {
+                console.log('✓ 额度状态持久化（重启后计数保留: 42/7）');
+            } else {
+                console.error(`✗ 额度状态未持久化：重启后读到 ${val}，期望 42/7`);
+                failed = true;
+            }
+        }
+    }
 } finally {
     run('docker', ['rm', '-f', CONTAINER]);
+    try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
 }
 
 if (failed) process.exit(1);

@@ -54,5 +54,13 @@
   <Config Name="轮询间隔（毫秒）" Target="POLL_INTERVAL_MS" Default="5000" Mode="" Description="查询生成结果的间隔。默认 5 秒。调小会增加上游压力，调大会让出图反馈变慢。" Type="Variable" Display="advanced" Required="false" Mask="false">5000</Config>
   <Config Name="单次任务超时（毫秒）" Target="REQUEST_TIMEOUT_MS" Default="900000" Mode="" Description="单个生成任务等待结果的最长时间，默认 15 分钟。IDLECLOUD 在高峰期可能排队较久，不建议调得过小。" Type="Variable" Display="advanced" Required="false" Mask="false">900000</Config>
   <Config Name="日志级别" Target="LOG_LEVEL" Default="info" Mode="" Description="可选 error / warn / info / debug。排查问题时用 debug 可看到转换后的请求体（含提示词），排障后建议改回 info。" Type="Variable" Display="advanced" Required="false" Mask="false">info</Config>
+  <Config Name="额度状态文件" Target="QUOTA_FILE" Default="/data/quota.json" Mode="" Description="每日次数与每周 V5 剩余次数的统计文件。留空则只在内存中统计，重启后清零。需与上方「数据目录」映射配合。" Type="Variable" Display="advanced" Required="false" Mask="false">/data/quota.json</Config>
+  <Config Name="每日生图次数上限" Target="DAILY_LIMIT" Default="600" Mode="" Description="对应 NovelAI 的「训练步数」字段。IDLECLOUD 进阶档位（¥30/月）为每日 600 次，高级档位（≥¥40/月）为 800 次，请按你的实际档位填写。" Type="Variable" Display="advanced" Required="false" Mask="false">600</Config>
+  <Config Name="每周 V5 图片额度上限" Target="V5_WEEKLY_LIMIT" Default="100" Mode="" Description="对应 NovelAI 的「V5 充能」字段。月档 30–39.99 为 70 张，≥40 为 100 张，特殊账号为 200 张。请按你的实际档位填写。" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+  <Config Name="训练步数字段口径" Target="DAILY_VALUE_MODE" Default="remaining" Mode="" Description="NovelAI 的「训练步数」填什么：remaining = 每日剩余次数（默认），used = 当日已用次数。可选 remaining / used。" Type="Variable" Display="advanced" Required="false" Mask="false">remaining</Config>
+  <Config Name="V5 充能百分比口径" Target="V5_PERCENT_MODE" Default="count" Mode="" Description="V5 充能条显示什么：count = 剩余次数直接当百分比（剩余 67 次就显示 67%，默认），ratio = 剩余次数 ÷ 上限 × 100。可选 count / ratio。" Type="Variable" Display="advanced" Required="false" Mask="false">count</Config>
+  <Config Name="普通模式步数上限" Target="NORMAL_STEPS_LIMIT" Default="28" Mode="" Description="超过该步数视为「大图模式」。大图消耗大图点数，不占用每日次数与每周 V5 额度，因此不计入统计。默认 28。" Type="Variable" Display="advanced" Required="false" Mask="false">28</Config>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="运行用户 UID。unraid 上通常为 99（nobody）。若额度状态无法保存，请改为数据目录的属主 UID，或在宿主机执行 chown -R 99:100 数据目录。" Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="运行用户 GID。unraid 上通常为 100（users）。与上方 PUID 配合使用。" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
   <TailscaleStateDir/>
 </Container>
