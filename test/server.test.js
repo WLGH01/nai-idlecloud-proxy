@@ -816,6 +816,123 @@ test('并发限制：多个请求串行执行（MAX_CONCURRENCY=1）', async () 
     }
 });
 
+test('间隔默认关闭：未设置 MIN_INTERVAL 时不应有任何额外延迟', async () => {
+    const upstream = await startMockUpstream({ mode: 'simple' });
+    // 不传 minIntervalMs，走 loadConfig 的默认值
+    const config = loadConfig({}, {
+        baseUrl: upstream.baseUrl,
+        apiKey: VALID_KEY,
+        pollIntervalMs: 10,
+        requestTimeoutMs: 5000,
+        logLevel: 'error',
+        quotaFile: null,
+    });
+    assert.equal(config.minIntervalMs, 0, '默认应为 0（不节流）');
+
+    const proxy = await startProxy(upstream.baseUrl);
+    try {
+        const t0 = Date.now();
+        await Promise.all([
+            postGenerate(proxy.baseUrl, naiPayload()),
+            postGenerate(proxy.baseUrl, naiPayload()),
+        ]);
+        const elapsed = Date.now() - t0;
+        assert.ok(elapsed < 3000, `两次请求不应被强制间隔拖慢，实际 ${elapsed}ms`);
+        assert.equal(upstream.received.submits.length, 2);
+    } finally {
+        proxy.server.close();
+        upstream.server.close();
+    }
+});
+
+test('间隔开启后生效：MIN_INTERVAL_MS 应真实拉开两次提交', async () => {
+    const upstream = await startMockUpstream({ mode: 'simple' });
+    const proxy = await startProxy(upstream.baseUrl, { maxConcurrency: 1, minIntervalMs: 400 });
+    try {
+        const t0 = Date.now();
+        await Promise.all([
+            postGenerate(proxy.baseUrl, naiPayload()),
+            postGenerate(proxy.baseUrl, naiPayload()),
+        ]);
+        const elapsed = Date.now() - t0;
+        assert.ok(elapsed >= 400, `开启 400ms 间隔后总耗时应 >= 400ms，实际 ${elapsed}ms`);
+        assert.equal(upstream.received.submits.length, 2);
+    } finally {
+        proxy.server.close();
+        upstream.server.close();
+    }
+});
+
+test('时间类配置以秒为单位，内部换算为毫秒', () => {
+    const cfg = loadConfig({
+        MIN_INTERVAL: '20',
+        POLL_INTERVAL: '5',
+        REQUEST_TIMEOUT: '900',
+    });
+    assert.equal(cfg.minIntervalMs, 20000, '20 秒 -> 20000 毫秒');
+    assert.equal(cfg.pollIntervalMs, 5000, '5 秒 -> 5000 毫秒');
+    assert.equal(cfg.requestTimeoutMs, 900000, '900 秒 -> 900000 毫秒');
+});
+
+test('时间类配置支持小数秒', () => {
+    const cfg = loadConfig({ MIN_INTERVAL: '0.5', POLL_INTERVAL: '2.5' });
+    assert.equal(cfg.minIntervalMs, 500);
+    assert.equal(cfg.pollIntervalMs, 2500);
+});
+
+test('时间类配置默认值以秒表达', () => {
+    const cfg = loadConfig({});
+    assert.equal(cfg.minIntervalMs, 0, '默认关闭');
+    assert.equal(cfg.pollIntervalMs, 5000);
+    assert.equal(cfg.requestTimeoutMs, 900000);
+});
+
+test('兼容旧的 *_MS 变量名（升级后原配置不失效）', () => {
+    const cfg = loadConfig({ MIN_INTERVAL_MS: '20000', POLL_INTERVAL_MS: '3000' });
+    assert.equal(cfg.minIntervalMs, 20000);
+    assert.equal(cfg.pollIntervalMs, 3000);
+});
+
+test('新变量优先于旧变量', () => {
+    const cfg = loadConfig({ MIN_INTERVAL: '7', MIN_INTERVAL_MS: '20000' });
+    assert.equal(cfg.minIntervalMs, 7000, '新变量应优先');
+});
+
+test('新变量非法时回退到旧变量', () => {
+    const cfg = loadConfig({ MIN_INTERVAL: 'abc', MIN_INTERVAL_MS: '20000' });
+    assert.equal(cfg.minIntervalMs, 20000, '新变量无效时应回退到旧变量');
+});
+
+test('非法值回退到默认', () => {
+    const cfg = loadConfig({ MIN_INTERVAL: 'abc', POLL_INTERVAL: '-5', REQUEST_TIMEOUT: '' });
+    assert.equal(cfg.minIntervalMs, 0);
+    assert.equal(cfg.pollIntervalMs, 5000);
+    assert.equal(cfg.requestTimeoutMs, 900000);
+});
+
+test('上游 429 限速时应如实透传，不静默重试', async () => {
+    const upstream = await startMockUpstream({ mode: 'simple' });
+    upstream.server.removeAllListeners('request');
+    upstream.server.on('request', async (req, res) => {
+        const url = new URL(req.url, 'http://localhost');
+        if (req.method === 'POST' && url.pathname === '/api/generate_image') {
+            res.writeHead(429, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'API requests must be at least 20 seconds apart.' }));
+        }
+        res.writeHead(404).end();
+    });
+
+    const proxy = await startProxy(upstream.baseUrl);
+    try {
+        const { res, json } = await postGenerate(proxy.baseUrl, naiPayload());
+        assert.equal(res.status, 429, '限速错误应透传给客户端');
+        assert.match(json.message, /429/);
+    } finally {
+        proxy.server.close();
+        upstream.server.close();
+    }
+});
+
 test('坏 JSON 请求体返回 400', async () => {
     const upstream = await startMockUpstream({ mode: 'simple' });
     const proxy = await startProxy(upstream.baseUrl);

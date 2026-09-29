@@ -109,12 +109,23 @@ IDLECLOUD 的 V5 异步任务会额外返回 `v5_delivery` 元数据，要求客
 
 ## 五、限流：串行队列
 
-IDLECLOUD 要求：
+IDLECLOUD 服务端确实会拒绝过于频繁的请求，原文为：
 
-- API 请求间隔**至少 20 秒**；
-- 并发任务限制为**每用户 1 个**。
+```
+HTTP 429 {"error":"API requests must be at least 20 seconds apart."}
+```
 
-代理内置串行队列，自动排队与节流，客户端可以随意并发提交而不会触发上游限流。
+文档同时要求「并发任务限制为 1 个/用户」。
+
+代理内置串行队列：**并发固定为 1**，上一个任务（含提交与轮询）结束后才轮到下一个，
+客户端可以随意并发提交而不会撞上并发限制。
+
+**请求间隔默认关闭（`MIN_INTERVAL=0`）**。原因是串行队列本身已经足够——
+一次生成通常远超 20 秒，两次提交天然间隔更久。若你在别处也用同一个 Key
+（网页端、其它工具），彼此不知道对方，可能互相撞限速，此时把 `MIN_INTERVAL` 设为 `20` 即可强制拉开。
+
+> 注意：代理只能约束经过自己的请求。若同一 Key 同时被多个客户端使用，仍可能触发上游限速，
+> 此时代理会如实把 `429` 透传给客户端，不会静默重试。
 
 ---
 
@@ -201,10 +212,10 @@ docker build -t nai-idlecloud-proxy:latest .
 | `IDLECLOUD_BASE_URL` | `https://api.idlecloud.cc` | 上游基础地址，**不带** `/api` 后缀 |
 | `IDLECLOUD_API_KEY` | 空 | IDLECLOUD API Key。填写后进入替换模式（推荐） |
 | `AUTH_PASSTHROUGH` | `true` | 未配置 Key 时是否透传客户端 Bearer |
-| `MIN_INTERVAL_MS` | `20000` | 向上游提交的最小间隔。**不建议低于 20000** |
+| `MIN_INTERVAL` | `0` | 两次向上游提交的最小间隔（**秒**）。默认 0 = 关闭。需要时填 `20` |
 | `MAX_CONCURRENCY` | `1` | 并发数。**上游限制为 1** |
-| `POLL_INTERVAL_MS` | `5000` | 轮询结果间隔 |
-| `REQUEST_TIMEOUT_MS` | `900000` | 单任务总超时（15 分钟） |
+| `POLL_INTERVAL` | `5` | 轮询结果间隔（**秒**） |
+| `REQUEST_TIMEOUT` | `900` | 单任务总超时（**秒**，默认 15 分钟） |
 | `AUGMENT_MODEL` | `nai-diffusion-4-5-full` | 图像工具端点的兜底模型 |
 | `LOG_LEVEL` | `info` | `error` / `warn` / `info` / `debug` |
 | `QUOTA_FILE` | `/data/quota.json` | 额度状态文件；设为空字符串则仅内存统计 |

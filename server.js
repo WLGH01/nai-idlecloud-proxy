@@ -64,6 +64,34 @@ function envBool(env, name, fallback) {
     return ['1', 'true', 'yes', 'on'].includes(String(raw).toLowerCase());
 }
 
+/**
+ * 读取以「秒」为单位的时间配置，内部统一换算成毫秒使用。
+ *
+ * 配置项对外一律用秒（更符合直觉，避免多写三个零），代码内部仍以毫秒计算。
+ * 兼容旧的 `*_MS` 变量：新变量优先，旧变量作为回退，保证既有部署升级后行为不变。
+ *
+ * @param {Record<string,string|undefined>} env
+ * @param {string} name 秒制变量名，如 `MIN_INTERVAL`
+ * @param {number} fallbackSeconds 默认值（秒）
+ * @returns {number} 毫秒
+ */
+function envSeconds(env, name, fallbackSeconds) {
+    const raw = env[name];
+    if (raw !== undefined && raw !== '') {
+        const seconds = Number.parseFloat(raw);
+        if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+    }
+
+    // 回退到旧的毫秒制变量
+    const legacyRaw = env[`${name}_MS`];
+    if (legacyRaw !== undefined && legacyRaw !== '') {
+        const legacy = Number.parseInt(legacyRaw, 10);
+        if (Number.isFinite(legacy) && legacy >= 0) return legacy;
+    }
+
+    return fallbackSeconds * 1000;
+}
+
 export function loadConfig(env = process.env, overrides = {}) {
     return {
         port: envInt(env, 'PORT', 8788),
@@ -73,11 +101,11 @@ export function loadConfig(env = process.env, overrides = {}) {
         apiKey: env.IDLECLOUD_API_KEY || '',
         // 未配置 apiKey 时，是否把客户端 Bearer 当作 IDLECLOUD API Key 直接透传
         authPassthrough: envBool(env, 'AUTH_PASSTHROUGH', true),
-        // 轮询间隔 / 总超时
-        pollIntervalMs: envInt(env, 'POLL_INTERVAL_MS', 5000),
-        requestTimeoutMs: envInt(env, 'REQUEST_TIMEOUT_MS', 900000),
-        // 上游限制：请求间隔至少 20 秒、并发 1
-        minIntervalMs: envInt(env, 'MIN_INTERVAL_MS', 20000),
+        // 轮询间隔（秒）/ 单任务总超时（秒）——对外用秒，内部转毫秒
+        pollIntervalMs: envSeconds(env, 'POLL_INTERVAL', 5),
+        requestTimeoutMs: envSeconds(env, 'REQUEST_TIMEOUT', 900),
+        // 上游请求间隔（秒），默认 0 = 关闭（不节流）
+        minIntervalMs: envSeconds(env, 'MIN_INTERVAL', 0),
         maxConcurrency: Math.max(1, envInt(env, 'MAX_CONCURRENCY', 1)),
         // 图像工具端点使用的兜底模型
         augmentModel: env.AUGMENT_MODEL || 'nai-diffusion-4-5-full',
@@ -104,7 +132,13 @@ export function loadConfig(env = process.env, overrides = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// 串行队列：上游限制并发 1、请求间隔至少 20 秒
+// 串行队列：并发数与提交间隔均可由启动项控制
+//
+// 关于间隔：IDLECLOUD 服务端确实会拒绝过于频繁的请求，原文为
+//   HTTP 429 {"error":"API requests must be at least 20 seconds apart."}
+// 但本队列天然是串行的——上一个任务（含提交与轮询）结束后才轮到下一个，
+// 而一次生成通常远超 20 秒，因此间隔默认关闭（0）即可满足上游要求。
+// 需要显式限速时，用 MIN_INTERVAL_MS 开启。
 // ---------------------------------------------------------------------------
 
 export class SerialQueue {
@@ -125,11 +159,14 @@ export class SerialQueue {
 
     #drain() {
         if (this.running >= this.maxConcurrency || this.queue.length === 0) return;
-        const elapsed = Date.now() - this.lastStart;
-        const wait = Math.max(0, this.minIntervalMs - elapsed);
-        if (wait > 0) {
-            setTimeout(() => this.#drain(), wait);
-            return;
+        // minIntervalMs <= 0 表示不节流
+        if (this.minIntervalMs > 0) {
+            const elapsed = Date.now() - this.lastStart;
+            const wait = Math.max(0, this.minIntervalMs - elapsed);
+            if (wait > 0) {
+                setTimeout(() => this.#drain(), wait);
+                return;
+            }
         }
         const item = this.queue.shift();
         this.running += 1;
@@ -654,7 +691,10 @@ if (isMain()) {
             endpoint: '/api/generate_image (通用端点)',
             key_configured: Boolean(config.apiKey),
             auth_passthrough: config.authPassthrough,
-            min_interval_ms: config.minIntervalMs,
+            min_interval_s: config.minIntervalMs / 1000,
+            poll_interval_s: config.pollIntervalMs / 1000,
+            request_timeout_s: config.requestTimeoutMs / 1000,
+            max_concurrency: config.maxConcurrency,
         });
     });
 
